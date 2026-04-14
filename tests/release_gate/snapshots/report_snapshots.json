@@ -1,0 +1,66 @@
+{
+  "utilization": {
+    "Slice LUTs": {
+      "used": 1234,
+      "available": 203800,
+      "percentage": 0.61
+    },
+    "Slice Registers": {
+      "used": 5678,
+      "available": 407600,
+      "percentage": 1.39
+    },
+    "Block RAM Tile": {
+      "used": 10,
+      "available": 365,
+      "percentage": 2.74
+    },
+    "DSPs": {
+      "used": 5,
+      "available": 740,
+      "percentage": 0.68
+    }
+  },
+  "timing": {
+    "setup": {
+      "worst_slack": 2.345
+    },
+    "hold": {
+      "worst_slack": 0.567
+    },
+    "timing_met": true
+  },
+  "power": {
+    "total_power": 1.234,
+    "dynamic_power": 0.856,
+    "static_power": 0.378,
+    "components": {}
+  },
+  "drc": {
+    "passed": false,
+    "errors": 1,
+    "warnings": 1,
+    "violations": [
+      {
+        "type": "error",
+        "message": "ERROR: [DRC NSTD-1] Unspecified I/O Standard"
+      },
+      {
+        "type": "warning",
+        "message": "WARNING: [DRC UCIO-1] Unconstrained Logical Port"
+      }
+    ]
+  },
+  "methodology": {
+    "total_findings": 2,
+    "matched_findings": 2,
+    "severity_counts": {
+      "critical_warning": 1,
+      "warning": 1
+    },
+    "findings": [
+      "[critical_warning] clock interaction issue",
+      "[warning] reset synchronizer issue"
+    ]
+  }
+}

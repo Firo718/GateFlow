@@ -1,0 +1,103 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc.*
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+.mcp.json
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Type checking
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Distribution
+.pypi/
+*.manifest
+*.spec
+
+# Logs
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Project specific - Vivado/FPGA
+.Xil/
+*.jou
+*.xpr
+*.cache/
+*.hw/
+*.runs/
+*.sim/
+*.srcs/
+*.ip_user_files/
+*.bd/
+*.hw_emu/
+*.mem
+*.bit
+*.ltx
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Others directory (non-project files)
+others/temp-logs/
+others/temp-files/

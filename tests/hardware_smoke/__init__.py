@@ -1,0 +1,1 @@
+"""Hardware smoke test package."""
