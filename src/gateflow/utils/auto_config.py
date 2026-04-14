@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 自动时钟和中断管理模块。
 
