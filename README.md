@@ -1,6 +1,22 @@
 # GateFlow
 
 <p align="center">
+  <a href="https://github.com/Firo718/GateFlow/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+"></a>
+  <a href="https://github.com/Firo718/GateFlow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Firo718/GateFlow/ci.yml?branch=main" alt="CI"></a>
+</p>
+
+<p align="center">
+  <strong>AI-assisted MCP server and Python SDK for AMD Vivado FPGA workflows.</strong>
+</p>
+
+<p align="center">
+  面向 Claude、Cursor 等 AI 工具的 Vivado FPGA 自动化接口，覆盖项目创建、约束、综合、实现、仿真、硬件调试与 Block Design。
+</p>
+
+> Status: `0.1.0` alpha. Current primary platform is Windows. Vivado-dependent workflows require a local Vivado installation.
+
+<p align="center">
   <strong>开源的 AI 辅助 Vivado FPGA 开发 MCP 服务器</strong>
 </p>
 

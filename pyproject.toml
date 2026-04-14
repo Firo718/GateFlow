@@ -1,7 +1,7 @@
 [project]
 name = "gateflow"
 version = "0.1.0"
-description = "An open-source MCP server for AI-assisted Vivado FPGA development"
+description = "AI-assisted MCP server and Python SDK for AMD Vivado FPGA workflows"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
