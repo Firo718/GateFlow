@@ -1,16 +1,17 @@
-"""
-运行 pytest 测试并输出结果。
-"""
+"""Run pytest from the current repository root and print the result."""
 
+from pathlib import Path
 import subprocess
 import sys
 
-# 运行测试
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 result = subprocess.run(
-    [sys.executable, '-m', 'pytest', 'f:/GateFlow/tests/', '-v', '--tb=short'],
+    [sys.executable, "-m", "pytest", str(REPO_ROOT / "tests"), "-v", "--tb=short"],
     capture_output=True,
     text=True,
-    cwd='f:/GateFlow'
+    cwd=REPO_ROOT,
 )
 
 print("STDOUT:")
