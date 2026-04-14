@@ -17,10 +17,6 @@
 > Status: `0.1.0` alpha. Current primary platform is Windows. Vivado-dependent workflows require a local Vivado installation.
 
 <p align="center">
-  <strong>开源的 AI 辅助 Vivado FPGA 开发 MCP 服务器</strong>
-</p>
-
-<p align="center">
   <a href="#功能特性">功能特性</a> -
   <a href="#快速开始">快速开始</a> -
   <a href="#使用指南">使用指南</a> -
