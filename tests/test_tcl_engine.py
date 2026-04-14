@@ -6,6 +6,7 @@ Tcl 引擎测试模块。
 
 import asyncio
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch, mock_open
@@ -128,24 +129,23 @@ class TestVivadoDetector:
             assert result is not None
             assert result.version == "2024.1"
 
-    @patch("os.name", "nt")
-    @patch("winreg.OpenKey")
-    @patch("winreg.EnumKey")
-    @patch("winreg.QueryValueEx")
-    def test_detect_from_registry(self, mock_query, mock_enum, mock_open):
+    def test_detect_from_registry(self):
         """测试从 Windows 注册表检测 Vivado。"""
+        fake_winreg = MagicMock()
+        fake_winreg.HKEY_LOCAL_MACHINE = object()
+        fake_winreg.HKEY_CURRENT_USER = object()
+
         # 模拟注册表结构
         mock_key = MagicMock()
-        mock_version_key = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_key
+        fake_winreg.OpenKey.return_value.__enter__.return_value = mock_key
         mock_key.__enter__ = MagicMock(return_value=mock_key)
         mock_key.__exit__ = MagicMock(return_value=False)
         
         # 模拟枚举版本 - winreg.EnumKey 在结束时抛出 OSError
-        mock_enum.side_effect = ["2024.1", "2023.2", OSError("No more keys")]
+        fake_winreg.EnumKey.side_effect = ["2024.1", "2023.2", OSError("No more keys")]
         
         # 模拟查询安装路径
-        mock_query.return_value = ("C:/Xilinx/Vivado/2024.1", None)
+        fake_winreg.QueryValueEx.return_value = ("C:/Xilinx/Vivado/2024.1", None)
         
         with patch.object(VivadoDetector, "_validate_vivado_path") as mock_validate:
             mock_info = VivadoInfo(
@@ -155,20 +155,23 @@ class TestVivadoDetector:
                 tcl_shell=Path("C:/Xilinx/Vivado/2024.1/bin/vivado -mode tcl"),
             )
             mock_validate.return_value = mock_info
-            
-            result = VivadoDetector._detect_from_registry()
-            assert result is not None
 
-    @patch("os.name", "nt")
+            with patch.dict(sys.modules, {"winreg": fake_winreg}):
+                result = VivadoDetector._detect_from_registry()
+
+        assert result is not None
+
     def test_validate_vivado_path_windows(self):
         """测试 Windows 路径验证。"""
+        vivado_root = Path("/tmp/fake_vivado/2024.1")
         with patch.object(Path, "exists") as mock_exists:
             # 模拟可执行文件存在
             mock_exists.side_effect = lambda: True
-            
-            with patch.object(Path, "__new__", return_value=Path("C:/Xilinx/Vivado/2024.1")):
-                # 由于路径验证比较复杂，这里只测试逻辑
-                pass
+
+            with patch("gateflow.vivado.tcl_engine.os.name", "nt"):
+                result = VivadoDetector._validate_vivado_path(vivado_root)
+
+        assert result is not None
 
     def test_detect_vivado_not_found(self):
         """测试未找到 Vivado 的情况。"""

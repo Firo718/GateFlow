@@ -198,10 +198,9 @@ class TestGateFlowSettings:
         assert settings.workspace_roots == ["/path1", "/path2"]
         
         # 字符串格式（使用路径分隔符）
-        with patch("gateflow.settings.os.name", "nt"):
-            with patch("gateflow.settings._get_env_separator", return_value=";"):
-                settings = GateFlowSettings(workspace_roots="/path1;/path2;/path3")
-                assert settings.workspace_roots == ["/path1", "/path2", "/path3"]
+        with patch("gateflow.settings._get_env_separator", return_value=";"):
+            settings = GateFlowSettings(workspace_roots="/path1;/path2;/path3")
+            assert settings.workspace_roots == ["/path1", "/path2", "/path3"]
 
     def test_get_timeout_config(self):
         """测试获取超时配置"""

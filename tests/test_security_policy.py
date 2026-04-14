@@ -91,7 +91,7 @@ class TestSecurityPolicy:
     def test_from_env_workspace_roots(self):
         """测试从环境变量读取工作空间根目录"""
         # Windows 风格
-        with patch("gateflow.settings.os.name", "nt"):
+        with patch("gateflow.settings._get_env_separator", return_value=";"):
             with patch.dict(os.environ, {"GATEFLOW_WORKSPACE_ROOTS": "C:/path1;C:/path2"}):
                 policy = SecurityPolicy.from_env()
                 assert len(policy.allowed_roots) == 2
