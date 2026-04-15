@@ -109,7 +109,13 @@ NON_BLOCKING_STARTUP_TEMPLATE = """
 gateflow_start_server {port}
 """
 
-BLOCKING_STARTUP_PATTERN = r"#.*?if \{\[gateflow_start_server __PORT__\]\} \{.*?vwait forever\s*\}"
+BLOCKING_STARTUP_TEMPLATE = """
+# 自动启动服务器
+if {{[gateflow_start_server {port}]}} {{
+    # 进入事件循环，保持服务器运行
+    vwait forever
+}}
+"""
 
 
 @dataclass
@@ -387,12 +393,12 @@ class TclServerInstaller:
         if blocking:
             return script
 
-        return re.sub(
-            BLOCKING_STARTUP_PATTERN.replace("__PORT__", str(port)),
-            NON_BLOCKING_STARTUP_TEMPLATE.format(port=port).strip(),
-            script,
-            flags=re.DOTALL,
-        )
+        blocking_startup = BLOCKING_STARTUP_TEMPLATE.format(port=port).strip()
+        non_blocking_startup = NON_BLOCKING_STARTUP_TEMPLATE.format(port=port).strip()
+        updated_script = script.replace(blocking_startup, non_blocking_startup)
+        if updated_script == script:
+            raise ValueError("failed to replace blocking startup block in Tcl server template")
+        return updated_script
     
     def install_to_vivado(self, port: int = DEFAULT_PORT) -> bool:
         """
@@ -542,6 +548,10 @@ class TclServerInstaller:
         Returns:
             Vivado_init.tcl 文件路径
         """
+        if self.vivado is None:
+            return None
+        if self.vivado.init_tcl_path is None:
+            self.vivado.init_tcl_path = VivadoDetector._find_init_tcl(self.vivado.path)
         return self.vivado.init_tcl_path
     
     def _create_init_tcl_if_not_exists(self) -> bool:

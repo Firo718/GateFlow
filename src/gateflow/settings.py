@@ -31,6 +31,7 @@ GateFlow 统一配置模块
 import json
 import logging
 import os
+import re
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +45,60 @@ logger = logging.getLogger(__name__)
 # 配置文件路径
 CONFIG_DIR = Path.home() / ".gateflow"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+
+_WINDOWS_ABS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _looks_like_windows_absolute_path(value: str) -> bool:
+    """Return whether the string looks like a Windows absolute path."""
+    return bool(_WINDOWS_ABS_PATH_RE.match(value.strip()))
+
+
+def _split_workspace_roots(raw_value: str, separator: str | None = None) -> list[str]:
+    """Split workspace roots while preserving Windows drive prefixes."""
+    value = raw_value.strip()
+    if not value:
+        return []
+
+    if ";" in value:
+        return [part.strip() for part in value.split(";") if part.strip()]
+
+    if separator is None:
+        separator = _get_env_separator()
+
+    if separator != ":" or ":" not in value:
+        return [part.strip() for part in value.split(separator) if part.strip()]
+
+    parts: list[str] = []
+    current: list[str] = []
+    for index, char in enumerate(value):
+        is_windows_drive = (
+            char == ":"
+            and index == 1
+            and value[0].isalpha()
+            and len(value) > 2
+            and value[2] in {"/", "\\"}
+        )
+        if char == ":" and not is_windows_drive:
+            part = "".join(current).strip()
+            if part:
+                parts.append(part)
+            current = []
+            continue
+        current.append(char)
+
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _normalize_allowed_root(root: str) -> str:
+    """Normalize an allowed root without corrupting Windows-style paths on non-Windows hosts."""
+    expanded = str(Path(root).expanduser())
+    if _looks_like_windows_absolute_path(expanded):
+        return expanded.replace("\\", "/")
+    return str(Path(expanded).resolve())
 
 
 # ============================================================================
@@ -102,7 +157,7 @@ class SecurityPolicy:
         """初始化后处理"""
         # 展开路径中的 ~ 符号
         self.allowed_roots = [
-            str(Path(root).expanduser().resolve())
+            _normalize_allowed_root(root)
             for root in self.allowed_roots
         ]
 
@@ -138,8 +193,7 @@ class SecurityPolicy:
         # 读取根目录配置
         env_roots = os.getenv("GATEFLOW_WORKSPACE_ROOTS", "")
         if env_roots:
-            separator = ";" if os.name == "nt" else ":"
-            allowed_roots = [r.strip() for r in env_roots.split(separator) if r.strip()]
+            allowed_roots = _split_workspace_roots(env_roots, separator=_get_env_separator())
         else:
             allowed_roots = ["~/.gateflow/workspaces"]
 
@@ -488,8 +542,7 @@ class GateFlowSettings(BaseSettings):
             return v
         if isinstance(v, str):
             # 使用路径分隔符分割
-            separator = _get_env_separator()
-            return [p.strip() for p in v.split(separator) if p.strip()]
+            return _split_workspace_roots(v, separator=_get_env_separator())
         return []
     
     def to_config_file(self) -> None:

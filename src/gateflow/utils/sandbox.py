@@ -142,7 +142,12 @@ class SandboxConfig:
 
         allowed_roots: list[str] | None = None
         if roots_env:
-            allowed_roots = [root.strip() for root in roots_env.split(os.pathsep) if root.strip()]
+            from gateflow.settings import _get_env_separator, _split_workspace_roots
+
+            allowed_roots = _split_workspace_roots(
+                roots_env,
+                separator=_get_env_separator(),
+            )
 
         allow_dangerous_operations: bool | None = None
         if dangerous_env is not None:

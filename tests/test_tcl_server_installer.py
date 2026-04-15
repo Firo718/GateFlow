@@ -67,6 +67,9 @@ class TestTclServerInstallerGenerateScript:
         script = installer.generate_script(port=9999, blocking=False)
 
         assert "gateflow_start_server 9999" in script
+        assert "gateflow_accept_connection" in script
+        assert "gateflow_handle_client" in script
+        assert "proc gateflow_start_server" in script
         assert "vwait forever" not in script
 
     def test_generate_script_with_version(self):
@@ -129,6 +132,8 @@ class TestTclServerInstallerInstall:
         assert result is True
         content = mock_vivado_installation.init_tcl_path.read_text(encoding='utf-8')
         assert "gateflow_start_server 9999" in content
+        assert "gateflow_accept_connection" in content
+        assert "proc gateflow_start_server" in content
         assert "vwait forever" not in content
 
     def test_install_idempotent(self, mock_vivado_installation):

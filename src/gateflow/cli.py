@@ -28,7 +28,7 @@ from gateflow import __version__
 from gateflow.capabilities import build_capability_manifest, write_capability_artifacts
 from gateflow.settings import CONFIG_DIR, get_settings, reset_settings
 from gateflow.vivado.tcl_engine import TclEngine, VivadoDetector
-from gateflow.vivado.tcl_server import TclServerInstaller, VivadoInstallation
+from gateflow.vivado.tcl_server import TclServerInstaller
 
 logger = logging.getLogger(__name__)
 
@@ -587,12 +587,7 @@ class EnvironmentDiagnostics:
         vivado_init_path: str | None = None
 
         if vivado_info:
-            installation = VivadoInstallation(
-                version=vivado_info.version,
-                path=vivado_info.install_path,
-                executable=vivado_info.executable,
-            )
-            installer = TclServerInstaller(installation)
+            installer = TclServerInstaller(vivado_info)
             init_tcl_path = installer.get_init_tcl_path()
             if init_tcl_path:
                 vivado_init_path = str(init_tcl_path)

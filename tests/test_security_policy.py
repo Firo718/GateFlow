@@ -22,6 +22,7 @@ from gateflow.settings import (
     reset_settings,
     validate_security_policy,
 )
+from gateflow.utils.sandbox import SandboxConfig
 
 
 class TestSecurityPolicy:
@@ -95,12 +96,20 @@ class TestSecurityPolicy:
             with patch.dict(os.environ, {"GATEFLOW_WORKSPACE_ROOTS": "C:/path1;C:/path2"}):
                 policy = SecurityPolicy.from_env()
                 assert len(policy.allowed_roots) == 2
+                assert policy.allowed_roots == ["C:/path1", "C:/path2"]
 
         # Unix 风格 - 跳过这个测试，因为在 Windows 上无法创建 PosixPath
         # with patch("gateflow.settings.os.name", "posix"):
         #     with patch.dict(os.environ, {"GATEFLOW_WORKSPACE_ROOTS": "/path1:/path2:/path3"}):
         #         policy = SecurityPolicy.from_env()
         #         assert len(policy.allowed_roots) == 3
+
+    def test_sandbox_config_from_env_windows_roots(self):
+        """SandboxConfig.from_env should keep Windows-style root lists intact."""
+        with patch.dict(os.environ, {"GATEFLOW_WORKSPACE_ROOTS": "C:/path1;C:/path2"}):
+            config = SandboxConfig.from_env()
+
+        assert len(config.allowed_roots) == 2
 
     def test_from_env_allow_dangerous(self):
         """测试从环境变量读取危险操作配置"""

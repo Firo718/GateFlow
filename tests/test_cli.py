@@ -407,6 +407,45 @@ class TestEnvironmentDiagnostics:
         assert result.passed is True
         assert "可运行" in result.message
 
+    def test_get_tcl_server_status_uses_detected_init_tcl_path(self, tmp_path):
+        """doctor/status should honor the init_tcl_path returned by Vivado detection."""
+        init_tcl_path = tmp_path / "Vivado_init.tcl"
+        init_tcl_path.write_text(
+            "# ===== GateFlow Tcl Server BEGIN =====\n"
+            "gateflow_start_server 10099\n"
+            "# ===== GateFlow Tcl Server END =====\n",
+            encoding="utf-8",
+        )
+        fake_vivado = type(
+            "FakeVivadoInfo",
+            (),
+            {
+                "version": "2024.1",
+                "install_path": Path("/vivado"),
+                "executable": Path("/vivado/bin/vivado"),
+                "init_tcl_path": init_tcl_path,
+            },
+        )()
+
+        with patch("gateflow.cli.get_settings", return_value=Mock(vivado_path="/vivado", tcp_port=10099)):
+            diagnostics = EnvironmentDiagnostics()
+            with patch.object(diagnostics, "_detect_vivado_info", return_value=fake_vivado):
+                with patch.object(
+                    diagnostics,
+                    "check_port_listener",
+                    return_value=DiagnosticResult("listener", True, "ok"),
+                ):
+                    with patch.object(
+                        diagnostics,
+                        "check_tcp_protocol",
+                        return_value=DiagnosticResult("protocol", True, "ok"),
+                    ):
+                        status = diagnostics.get_tcl_server_status(port=10099)
+
+        assert status["vivado_init_present"] is True
+        assert status["vivado_init_contains_gateflow"] is True
+        assert status["vivado_init_path"] == str(init_tcl_path)
+
     def test_cmd_status_ascii_output(self, tmp_path, capsys):
         """ASCII 模式下 status 应避免 emoji。"""
         (tmp_path / "config.json").write_text("{}", encoding="utf-8")

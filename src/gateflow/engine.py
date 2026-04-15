@@ -10,20 +10,21 @@ GateFlow 执行引擎管理器
 """
 
 import asyncio
+import json
 import logging
+import os
 import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from gateflow.execution_context import ExecutionContext, ExecutionContextKind
-from gateflow.settings import get_settings, TimeoutConfig
+from gateflow.settings import CONFIG_DIR, TimeoutConfig, get_settings
 from gateflow.vivado.tcp_client import (
     TcpClientManager,
     TcpConfig,
     VivadoTcpClient,
-    ConnectionState,
 )
 from gateflow.vivado.tcl_engine import TclEngine, TclResult, VivadoDetector
 from gateflow.vivado.tcl_server import TclServerInstaller
@@ -39,6 +40,8 @@ from gateflow.errors import (
 )
 
 logger = logging.getLogger(__name__)
+
+GUI_SESSION_STATE_FILE = CONFIG_DIR / "gui_session.json"
 
 
 class EngineMode:
@@ -97,11 +100,14 @@ class EngineManager:
         self._gui_tcp_port: int | None = None
         self._gui_server_script: str | None = None
         self._gui_owned_process: bool = False
+        self._gui_pid: int | None = None
+        self._gui_startup_pending: bool = False
         
         # 从 settings 读取超时配置
         settings = get_settings()
         self._execution_context: ExecutionContext = settings.get_execution_context()
         self._timeout_config: TimeoutConfig = settings.get_timeout_config()
+        self._load_gui_session_state()
         
     @property
     def mode(self) -> str:
@@ -414,6 +420,326 @@ class EngineManager:
             Result 统一返回结构
         """
         return await self.execute(command, timeout, auto_reconnect)
+
+    @staticmethod
+    def _normalize_gui_pid(pid: Any) -> int | None:
+        """Return an integer pid when available."""
+        return pid if isinstance(pid, int) and pid > 0 else None
+
+    @classmethod
+    def _is_process_running(cls, pid: int | None) -> bool:
+        """Best-effort process liveness check for persisted GUI sessions."""
+        if pid is None:
+            return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    def _save_gui_session_state(self) -> None:
+        """Persist GUI session metadata so status/attach can survive new CLI processes."""
+        if self._gui_tcp_port is None:
+            return
+
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "project_path": self._gui_project_path,
+            "tcp_port": self._gui_tcp_port,
+            "server_script": self._gui_server_script,
+            "owned_process": self._gui_owned_process,
+            "pid": self._gui_pid,
+            "startup_pending": self._gui_startup_pending,
+        }
+        GUI_SESSION_STATE_FILE.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _clear_gui_session_state(self) -> None:
+        """Remove persisted GUI session metadata."""
+        try:
+            GUI_SESSION_STATE_FILE.unlink(missing_ok=True)
+        except Exception:
+            logger.debug("failed to clear persisted GUI session state", exc_info=True)
+
+    def _load_gui_session_state(self) -> None:
+        """Load persisted GUI session metadata if it still looks valid."""
+        if not GUI_SESSION_STATE_FILE.exists():
+            return
+
+        try:
+            payload = json.loads(GUI_SESSION_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            logger.debug("failed to read persisted GUI session state", exc_info=True)
+            self._clear_gui_session_state()
+            return
+
+        pid = self._normalize_gui_pid(payload.get("pid"))
+        startup_pending = bool(payload.get("startup_pending", False))
+        tcp_port = payload.get("tcp_port")
+        if pid is not None and not self._is_process_running(pid):
+            self._clear_gui_session_state()
+            return
+        if pid is None and startup_pending:
+            self._clear_gui_session_state()
+            return
+
+        self._gui_pid = pid
+        self._gui_project_path = payload.get("project_path")
+        self._gui_tcp_port = tcp_port if isinstance(tcp_port, int) else None
+        self._gui_server_script = payload.get("server_script")
+        self._gui_owned_process = False
+        self._gui_startup_pending = startup_pending
+
+    def _persist_gui_launch(
+        self,
+        *,
+        process: subprocess.Popen[str] | None,
+        project_path: str | None,
+        tcp_port: int,
+        server_script: str | None,
+        owned_process: bool,
+        startup_pending: bool,
+    ) -> None:
+        """Update in-memory and persisted GUI session state."""
+        self._gui_process = process
+        normalized_pid = self._normalize_gui_pid(getattr(process, "pid", None))
+        if normalized_pid is not None:
+            self._gui_pid = normalized_pid
+        self._gui_project_path = project_path
+        self._gui_tcp_port = tcp_port
+        self._gui_server_script = server_script
+        self._gui_owned_process = owned_process
+        self._gui_startup_pending = startup_pending
+        self._save_gui_session_state()
+
+    def _gui_session_is_active(self) -> bool:
+        """Return whether the manager has a live or persisted GUI session."""
+        if self._gui_process is not None and self._gui_process.poll() is None:
+            return True
+        if self._mode == EngineMode.GUI_SESSION and self._tcp_client is not None:
+            return True
+        if self._gui_startup_pending and self._is_process_running(self._gui_pid):
+            return True
+        if self._gui_tcp_port is not None and not self._gui_startup_pending:
+            return True
+        return False
+
+    async def _connect_gui_tcp_client(self, tcp_port: int) -> bool:
+        """Connect the shared TCP client to a GUI session port."""
+        settings = get_settings()
+        TcpClientManager.reset()
+        tcp_config = TcpConfig(
+            host=settings.tcp_host,
+            port=tcp_port,
+            timeout=settings.timeout_single_command,
+            reconnect_attempts=settings.reconnect_attempts,
+            reconnect_delay=settings.reconnect_delay,
+        )
+        self._tcp_client = TcpClientManager.get_client(config=tcp_config)
+        return await TcpClientManager.ensure_connected()
+
+    def _build_pending_gui_response(
+        self,
+        *,
+        project_path: str | None,
+        tcp_port: int,
+        server_script: str | None,
+    ) -> dict[str, Any]:
+        """Return a response for a GUI session that is still starting."""
+        return {
+            "success": False,
+            "message": "GUI 会话已启动，但 TCP server 仍在初始化",
+            "error": "gui_tcp_not_ready",
+            "project_path": project_path,
+            "tcp_port": tcp_port,
+            "gui_process_started": True,
+            "shared_session": True,
+            "server_script": server_script,
+        }
+
+    async def _attach_gui_session_impl(
+        self,
+        *,
+        tcp_port: int,
+        project_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Attach to an already running Vivado GUI session via its GateFlow TCP port."""
+        settings = get_settings()
+        ready = await self._wait_for_tcp_ready(settings.tcp_host, tcp_port, timeout=10.0)
+        if not ready:
+            return {
+                "success": False,
+                "message": "无法附着到现有 GUI 会话",
+                "error": "gui_attach_tcp_not_ready",
+                "project_path": project_path,
+                "tcp_port": tcp_port,
+                "gui_process_started": False,
+                "shared_session": False,
+            }
+
+        connected = await self._connect_gui_tcp_client(tcp_port)
+        if not connected:
+            return {
+                "success": False,
+                "message": "无法附着到现有 GUI 会话",
+                "error": "gui_attach_connect_failed",
+                "project_path": project_path,
+                "tcp_port": tcp_port,
+                "gui_process_started": False,
+                "shared_session": False,
+            }
+
+        self._gui_process = None if self._gui_process is None else self._gui_process
+        self._gui_owned_process = self._gui_process is not None and self._gui_owned_process
+        self._gui_tcp_port = tcp_port
+        self._gui_startup_pending = False
+        self._mode = EngineMode.GUI_SESSION
+
+        if project_path:
+            open_result = await self.execute(f'open_project "{project_path}"', timeout=120.0)
+            if not open_result.success:
+                verify_result = await self.execute("current_project", timeout=30.0)
+                verify_name = (
+                    getattr(verify_result, "data", None)
+                    or getattr(verify_result, "result", None)
+                    or getattr(verify_result, "output", None)
+                )
+                if not (verify_result.success and str(verify_name).strip() == Path(project_path).stem):
+                    return {
+                        "success": False,
+                        "message": "已附着到 GUI 会话，但工程打开失败",
+                        "error": "gui_attach_open_project_failed",
+                        "project_path": project_path,
+                        "tcp_port": tcp_port,
+                        "gui_process_started": False,
+                        "shared_session": False,
+                    }
+            self._gui_project_path = project_path
+        else:
+            verify_result = await self.execute("current_project", timeout=30.0)
+            if verify_result.success:
+                current = (
+                    getattr(verify_result, "data", None)
+                    or getattr(verify_result, "result", None)
+                    or getattr(verify_result, "output", None)
+                )
+                if current:
+                    self._gui_project_path = str(current).strip()
+
+        self._save_gui_session_state()
+        return {
+            "success": True,
+            "message": "已附着到现有 GUI 会话",
+            "error": None,
+            "project_path": self._gui_project_path,
+            "tcp_port": tcp_port,
+            "gui_process_started": False,
+            "shared_session": True,
+            "attached": True,
+        }
+
+    async def _ensure_gui_session_impl(
+        self,
+        *,
+        project_path: str | None = None,
+        tcp_port: int | None = None,
+    ) -> dict[str, Any]:
+        """Internal implementation for GUI session startup and reuse."""
+        settings = get_settings()
+        selected_port = tcp_port or settings.gui_tcp_port
+        vivado_info = VivadoDetector.detect_vivado(
+            config_path=Path(settings.vivado_path) if settings.vivado_path else None
+        )
+        if not vivado_info:
+            return {
+                "success": False,
+                "message": "无法启动 GUI 会话",
+                "error": "vivado_not_found",
+                "project_path": project_path,
+                "tcp_port": tcp_port,
+                "gui_process_started": False,
+                "shared_session": False,
+            }
+
+        if self._gui_process and self._gui_process.poll() is None:
+            active_port = self._gui_tcp_port or selected_port
+            if self._gui_startup_pending:
+                ready = await self._wait_for_tcp_ready(settings.tcp_host, active_port, timeout=2.0)
+                if not ready:
+                    return self._build_pending_gui_response(
+                        project_path=self._gui_project_path or project_path,
+                        tcp_port=active_port,
+                        server_script=self._gui_server_script,
+                    )
+            return await self._attach_gui_session_impl(
+                tcp_port=active_port,
+                project_path=project_path or self._gui_project_path,
+            )
+
+        if self._gui_tcp_port == selected_port:
+            if self._gui_startup_pending:
+                ready = await self._wait_for_tcp_ready(settings.tcp_host, selected_port, timeout=2.0)
+                if not ready:
+                    return self._build_pending_gui_response(
+                        project_path=self._gui_project_path or project_path,
+                        tcp_port=selected_port,
+                        server_script=self._gui_server_script,
+                    )
+            elif await self._wait_for_tcp_ready(settings.tcp_host, selected_port, timeout=2.0):
+                return await self._attach_gui_session_impl(
+                    tcp_port=selected_port,
+                    project_path=project_path or self._gui_project_path,
+                )
+
+        config_dir = Path.home() / ".gateflow"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        script_path = config_dir / f"gui_session_{selected_port}.tcl"
+        installer = TclServerInstaller(vivado_info)
+        script_path.write_text(
+            installer.generate_script(port=selected_port, blocking=False),
+            encoding="utf-8",
+        )
+
+        cmd = [
+            str(vivado_info.executable),
+            "-mode",
+            "gui",
+            "-source",
+            str(script_path),
+            "-nolog",
+            "-nojournal",
+        ]
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        self._persist_gui_launch(
+            process=process,
+            project_path=project_path,
+            tcp_port=selected_port,
+            server_script=str(script_path),
+            owned_process=True,
+            startup_pending=True,
+        )
+
+        ready = await self._wait_for_tcp_ready(settings.tcp_host, selected_port)
+        if not ready:
+            return self._build_pending_gui_response(
+                project_path=project_path,
+                tcp_port=selected_port,
+                server_script=str(script_path),
+            )
+
+        self._gui_startup_pending = False
+        self._save_gui_session_state()
+        return await self._attach_gui_session_impl(
+            tcp_port=selected_port,
+            project_path=project_path,
+        )
     
     def get_mode_info(self) -> dict[str, Any]:
         """
@@ -430,14 +756,13 @@ class EngineManager:
             "tcp_state": None,
             "execution_context": self._execution_context.to_dict(),
             "gui_session": {
-                "active": (
-                    (self._gui_process is not None and self._gui_process.poll() is None)
-                    or (self._mode == EngineMode.GUI_SESSION and self._tcp_client is not None)
-                ),
+                "active": self._gui_session_is_active(),
                 "project_path": self._gui_project_path,
                 "tcp_port": self._gui_tcp_port,
                 "server_script": self._gui_server_script,
                 "owned_process": self._gui_owned_process,
+                "pid": self._gui_pid,
+                "startup_pending": self._gui_startup_pending,
             },
         }
         
@@ -488,6 +813,9 @@ class EngineManager:
         self._gui_tcp_port = None
         self._gui_server_script = None
         self._gui_owned_process = False
+        self._gui_pid = None
+        self._gui_startup_pending = False
+        self._clear_gui_session_state()
         self._initialized = False
         logger.info("引擎已关闭")
 
@@ -514,6 +842,10 @@ class EngineManager:
         tcp_port: int | None = None,
     ) -> dict[str, Any]:
         """Start a new Vivado GUI instance with a non-blocking GateFlow TCP server."""
+        return await self._ensure_gui_session_impl(
+            project_path=project_path,
+            tcp_port=tcp_port,
+        )
         settings = get_settings()
         vivado_info = VivadoDetector.detect_vivado(
             config_path=Path(settings.vivado_path) if settings.vivado_path else None
@@ -648,6 +980,10 @@ class EngineManager:
         project_path: str | None = None,
     ) -> dict[str, Any]:
         """Attach to an already running Vivado GUI session via its GateFlow TCP port."""
+        return await self._attach_gui_session_impl(
+            tcp_port=tcp_port,
+            project_path=project_path,
+        )
         settings = get_settings()
         ready = await self._wait_for_tcp_ready(settings.tcp_host, tcp_port, timeout=10.0)
         if not ready:

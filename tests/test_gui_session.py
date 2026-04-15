@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -110,6 +111,70 @@ async def test_engine_ensure_gui_session_success(tmp_path):
     assert result["success"] is True
     assert result["shared_session"] is True
     assert result["project_path"] == "F:/demo/demo.xpr"
+
+
+@pytest.mark.asyncio
+async def test_engine_ensure_gui_session_timeout_keeps_pending_process(tmp_path):
+    manager = EngineManager()
+    await manager.close()
+    fake_vivado = MagicMock(
+        version="2024.1",
+        install_path=Path("C:/Xilinx/Vivado/2024.1"),
+        executable=Path("C:/Xilinx/Vivado/2024.1/bin/vivado.bat"),
+    )
+    fake_process = MagicMock()
+    fake_process.poll.return_value = None
+    fake_process.pid = 4321
+    state_file = tmp_path / "gui_session.json"
+
+    with patch("gateflow.engine.CONFIG_DIR", tmp_path):
+        with patch("gateflow.engine.GUI_SESSION_STATE_FILE", state_file):
+            with patch("gateflow.engine.Path.home", return_value=tmp_path):
+                with patch("gateflow.engine.VivadoDetector.detect_vivado", return_value=fake_vivado):
+                    with patch("gateflow.engine.subprocess.Popen", return_value=fake_process):
+                        with patch.object(manager, "_wait_for_tcp_ready", AsyncMock(return_value=False)):
+                            result = await manager.ensure_gui_session(
+                                project_path="F:/demo/demo.xpr",
+                                tcp_port=10099,
+                            )
+
+    assert result["success"] is False
+    assert result["error"] == "gui_tcp_not_ready"
+    assert result["gui_process_started"] is True
+    assert result["shared_session"] is True
+    fake_process.terminate.assert_not_called()
+    persisted = json.loads(state_file.read_text(encoding="utf-8"))
+    assert persisted["tcp_port"] == 10099
+    assert persisted["startup_pending"] is True
+
+
+def test_engine_get_mode_info_uses_persisted_gui_state(tmp_path):
+    state_file = tmp_path / "gui_session.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "project_path": "F:/demo/demo.xpr",
+                "tcp_port": 10124,
+                "server_script": str(tmp_path / "gui_session_10124.tcl"),
+                "owned_process": False,
+                "pid": None,
+                "startup_pending": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("gateflow.engine.CONFIG_DIR", tmp_path):
+        with patch("gateflow.engine.GUI_SESSION_STATE_FILE", state_file):
+            manager = EngineManager()
+            manager._initialized = False
+            manager.__init__()
+            info = manager.get_mode_info()
+
+    gui_info = info["gui_session"]
+    assert gui_info["active"] is True
+    assert gui_info["tcp_port"] == 10124
+    assert gui_info["project_path"] == "F:/demo/demo.xpr"
 
 
 @pytest.mark.asyncio

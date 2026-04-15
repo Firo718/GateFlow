@@ -69,19 +69,20 @@ uv tool install gateflow
 
 ### 安装后配置
 
-安装完成后，如果提示 `gateflow` 命令找不到，请将以下路径添加到系统 PATH：
+安装完成后，如果提示 `gateflow` 命令找不到，通常不是 GateFlow 没装好，而是当前 Python 环境的 `Scripts` 目录不在 `PATH` 中。
 
-Windows:
-```
-C:\Users\<用户名>\AppData\Local\Python\pythoncore-3.14-64\Scripts
-```
-
-或使用完整路径运行：
-```bash
-C:\Users\<用户名>\AppData\Local\Python\pythoncore-3.14-64\Scripts\gateflow.exe
-```
 
 ### 配置 AI 工具
+
+CLI PATH note:
+
+```bash
+python -m gateflow.cli --version
+python -m gateflow.cli doctor
+python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+```
+
+The `Scripts` directory is different for each user and Python environment. Do not copy the example path above from another machine. Query the active interpreter and add the reported directory to your user `PATH`. If you do not want to modify `PATH`, keep using `python -m gateflow.cli <subcommand>`.
 
 #### Claude Desktop
 
@@ -477,6 +478,11 @@ ruff format src/
 - 项目主页: https://github.com/Firo718/GateFlow
 
 ---
+
+## CLI PATH Note
+
+If `gateflow` is installed but the command is not found, see [docs/PATH_SETUP.md](docs/PATH_SETUP.md).
+Use `python -m gateflow.cli ...` as the fallback form when the active Python `Scripts` directory is not yet in `PATH`.
 
 <p align="center">
   Made with love by the GateFlow Team
