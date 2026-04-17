@@ -102,6 +102,7 @@ class EngineManager:
         self._gui_owned_process: bool = False
         self._gui_pid: int | None = None
         self._gui_startup_pending: bool = False
+        self._gui_session_lock = asyncio.Lock()
         
         # 从 settings 读取超时配置
         settings = get_settings()
@@ -514,6 +515,95 @@ class EngineManager:
         self._gui_startup_pending = startup_pending
         self._save_gui_session_state()
 
+    @staticmethod
+    def _extract_result_text(result: Any) -> str | None:
+        """Extract a stripped string payload from a Result-like object."""
+        for attr in ("data", "result", "output"):
+            value = getattr(result, attr, None)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return None
+
+    @staticmethod
+    def _normalize_project_path(project_path: str | None) -> str | None:
+        """Normalize a project path for stable comparisons."""
+        if not project_path:
+            return None
+        return os.path.normcase(os.path.normpath(str(project_path)))
+
+    @staticmethod
+    def _infer_project_path(current_name: str | None, current_directory: str | None) -> str | None:
+        """Infer an xpr path from the current project name and directory when available."""
+        if not current_name or not current_directory:
+            return None
+        return str(Path(current_directory) / f"{current_name}.xpr")
+
+    @classmethod
+    def _describe_current_project(cls, current_name: str | None, current_directory: str | None) -> str | None:
+        """Return the best available current project reference."""
+        return cls._infer_project_path(current_name, current_directory) or current_name
+
+    @classmethod
+    def _requested_project_matches(
+        cls,
+        requested_path: str,
+        *,
+        actual_path: str | None,
+        current_name: str | None,
+        current_directory: str | None,
+    ) -> bool:
+        """Return whether the requested project matches the currently attached one."""
+        normalized_requested = cls._normalize_project_path(requested_path)
+        normalized_actual = cls._normalize_project_path(actual_path)
+        if normalized_requested and normalized_actual:
+            return normalized_requested == normalized_actual
+
+        requested = Path(requested_path)
+        if current_name and current_name != requested.stem:
+            return False
+        if current_directory:
+            return cls._normalize_project_path(str(requested.parent)) == cls._normalize_project_path(current_directory)
+        return bool(current_name)
+
+    async def _get_current_project_details(self) -> tuple[str | None, str | None, str | None]:
+        """Read the current project name and directory from the attached GUI session."""
+        current_result = await self.execute("current_project", timeout=30.0)
+        current_name = self._extract_result_text(current_result) if current_result.success else None
+        if not current_name:
+            return None, None, None
+
+        directory_result = await self.execute("get_property directory [current_project]", timeout=30.0)
+        current_directory = (
+            self._extract_result_text(directory_result) if directory_result.success else None
+        )
+        return current_name, current_directory, self._describe_current_project(current_name, current_directory)
+
+    def _build_project_mismatch_response(
+        self,
+        *,
+        requested_path: str,
+        actual_path: str | None,
+        current_name: str | None,
+        tcp_port: int,
+    ) -> dict[str, Any]:
+        """Return a structured response when a GUI session is bound to another project."""
+        return {
+            "success": False,
+            "message": "GUI session is already bound to a different project",
+            "error": "gui_project_mismatch",
+            "project_path": actual_path,
+            "project_path_requested": requested_path,
+            "project_path_actual": actual_path,
+            "current_project_name": current_name,
+            "tcp_port": tcp_port,
+            "gui_process_started": False,
+            "shared_session": True,
+            "attached": True,
+        }
+
     def _gui_session_is_active(self) -> bool:
         """Return whether the manager has a live or persisted GUI session."""
         if self._gui_process is not None and self._gui_process.poll() is None:
@@ -591,23 +681,44 @@ class EngineManager:
                 "shared_session": False,
             }
 
-        self._gui_process = None if self._gui_process is None else self._gui_process
-        self._gui_owned_process = self._gui_process is not None and self._gui_owned_process
+        if self._gui_process is not None and self._gui_process.poll() is not None:
+            self._gui_process = None
+            self._gui_owned_process = False
+            self._gui_pid = None
         self._gui_tcp_port = tcp_port
         self._gui_startup_pending = False
         self._mode = EngineMode.GUI_SESSION
+        current_name, current_directory, actual_project = await self._get_current_project_details()
 
         if project_path:
-            open_result = await self.execute(f'open_project "{project_path}"', timeout=120.0)
-            if not open_result.success:
-                verify_result = await self.execute("current_project", timeout=30.0)
-                verify_name = (
-                    getattr(verify_result, "data", None)
-                    or getattr(verify_result, "result", None)
-                    or getattr(verify_result, "output", None)
-                )
-                if not (verify_result.success and str(verify_name).strip() == Path(project_path).stem):
-                    return {
+            tracked_project = self._gui_project_path or actual_project
+            if actual_project:
+                if not self._requested_project_matches(
+                    project_path,
+                    actual_path=tracked_project,
+                    current_name=current_name,
+                    current_directory=current_directory,
+                ):
+                    self._gui_project_path = tracked_project
+                    self._save_gui_session_state()
+                    return self._build_project_mismatch_response(
+                        requested_path=project_path,
+                        actual_path=self._gui_project_path,
+                        current_name=current_name,
+                        tcp_port=tcp_port,
+                    )
+                self._gui_project_path = tracked_project or project_path
+            else:
+                open_result = await self.execute(f'open_project "{project_path}"', timeout=120.0)
+                if not open_result.success:
+                    current_name, current_directory, actual_project = await self._get_current_project_details()
+                    if not self._requested_project_matches(
+                        project_path,
+                        actual_path=actual_project,
+                        current_name=current_name,
+                        current_directory=current_directory,
+                    ):
+                        return {
                         "success": False,
                         "message": "已附着到 GUI 会话，但工程打开失败",
                         "error": "gui_attach_open_project_failed",
@@ -618,16 +729,7 @@ class EngineManager:
                     }
             self._gui_project_path = project_path
         else:
-            verify_result = await self.execute("current_project", timeout=30.0)
-            if verify_result.success:
-                current = (
-                    getattr(verify_result, "data", None)
-                    or getattr(verify_result, "result", None)
-                    or getattr(verify_result, "output", None)
-                )
-                if current:
-                    self._gui_project_path = str(current).strip()
-
+            self._gui_project_path = self._gui_project_path or actual_project
         self._save_gui_session_state()
         return {
             "success": True,
@@ -692,6 +794,13 @@ class EngineManager:
                     tcp_port=selected_port,
                     project_path=project_path or self._gui_project_path,
                 )
+            self._clear_gui_session_state()
+            self._gui_project_path = None
+            self._gui_tcp_port = None
+            self._gui_server_script = None
+            self._gui_owned_process = False
+            self._gui_pid = None
+            self._gui_startup_pending = False
 
         config_dir = Path.home() / ".gateflow"
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -842,10 +951,11 @@ class EngineManager:
         tcp_port: int | None = None,
     ) -> dict[str, Any]:
         """Start a new Vivado GUI instance with a non-blocking GateFlow TCP server."""
-        return await self._ensure_gui_session_impl(
-            project_path=project_path,
-            tcp_port=tcp_port,
-        )
+        async with self._gui_session_lock:
+            return await self._ensure_gui_session_impl(
+                project_path=project_path,
+                tcp_port=tcp_port,
+            )
         settings = get_settings()
         vivado_info = VivadoDetector.detect_vivado(
             config_path=Path(settings.vivado_path) if settings.vivado_path else None
@@ -980,10 +1090,11 @@ class EngineManager:
         project_path: str | None = None,
     ) -> dict[str, Any]:
         """Attach to an already running Vivado GUI session via its GateFlow TCP port."""
-        return await self._attach_gui_session_impl(
-            tcp_port=tcp_port,
-            project_path=project_path,
-        )
+        async with self._gui_session_lock:
+            return await self._attach_gui_session_impl(
+                tcp_port=tcp_port,
+                project_path=project_path,
+            )
         settings = get_settings()
         ready = await self._wait_for_tcp_ready(settings.tcp_host, tcp_port, timeout=10.0)
         if not ready:
